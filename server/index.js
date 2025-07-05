@@ -10,16 +10,234 @@ const port = 5000;
 
 require('dotenv').config();
 
-const pool = new Pool({
+console.log('DB ENV:', {
   user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
+  name: process.env.DB_NAME,
+  host: process.env.DB_HOST,
   port: process.env.DB_PORT,
+});
+
+/*
+CREATE TABLE IF NOT EXISTS indicator_master (
+  id SERIAL PRIMARY KEY,
+  indicator_name TEXT NOT NULL,
+  description TEXT,
+  sql_query TEXT NOT NULL,
+  query_result INTEGER,
+  created_by INTEGER,
+  created_on TIMESTAMP DEFAULT NOW()
+);
+*/
+
+// const pool = new Pool({
+//   user: process.env.DB_USER,
+//   host: process.env.DB_HOST,
+//   database: process.env.DB_NAME,
+//   password: process.env.DB_PASSWORD,
+//   port: parseInt(process.env.DB_PORT,10),
+// });
+
+const pool = new Pool({
+  user: 'postgres',
+  host: 'localhost',
+  database: 'medplat',
+  password: '12345678',
+  port: 5432,
 });
 
 app.use(cors());
 app.use(express.json());
+
+// Ensure derived_attributes table exists
+(async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS derived_attributes (
+      id SERIAL PRIMARY KEY,
+      derived_name TEXT NOT NULL,
+      formula TEXT NOT NULL,
+      result INTEGER,
+      created_on TIMESTAMP DEFAULT NOW()
+    )
+  `);
+})();
+
+// POST /api/attribute-value
+// Body: { table, column, indicator } (either column+table or indicator)
+app.post('/api/attribute-value', async (req, res) => {
+  const { table, column, indicator } = req.body;
+  try {
+    if (indicator) {
+      // Get value from indicator_master
+      const result = await pool.query('SELECT query_result FROM indicator_master WHERE indicator_name = $1', [indicator]);
+      if (result.rows.length > 0) {
+        return res.json({ value: result.rows[0].query_result });
+      } else {
+        return res.status(404).json({ error: 'Indicator not found' });
+      }
+    } else if (table && column) {
+      // Get count of non-null values in column
+      const query = `SELECT COUNT("${column}") AS cnt FROM "${table}"`;
+      const result = await pool.query(query);
+      const value = result.rows[0] && result.rows[0].cnt ? parseInt(result.rows[0].cnt, 10) : 0;
+      return res.json({ value });
+    } else {
+      return res.status(400).json({ error: 'Missing table/column or indicator' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/derived-attribute
+// Body: { derived_name, formula, result }
+app.post('/api/derived-attribute', async (req, res) => {
+  const { derived_name, formula, result } = req.body;
+  if (!derived_name || !formula || (typeof result !== 'number' && typeof result !== 'string')) {
+    return res.status(400).json({ error: 'Missing derived_name, formula, or result' });
+  }
+  // Accept result as decimal (string or number)
+  let resultVal = result;
+  if (typeof result === 'string') {
+    resultVal = parseFloat(result);
+    if (isNaN(resultVal)) {
+      return res.status(400).json({ error: 'Result must be a valid decimal number' });
+    }
+  }
+  try {
+    await pool.query(
+      'INSERT INTO derived_attributes (derived_name, formula, result) VALUES ($1, $2, $3)',
+      [derived_name, formula, resultVal]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/derived-attributes
+app.get('/api/derived-attributes', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM derived_attributes ORDER BY created_on DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/table-metadata/:table - columns and types
+app.get('/api/table-metadata/:table', async (req, res) => {
+  const { table } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`,
+      [table]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/sample-data/:table?limit=10 - sample rows
+app.get('/api/sample-data/:table', async (req, res) => {
+  const { table } = req.params;
+  const limit = parseInt(req.query.limit, 10) || 10;
+  try {
+    const result = await pool.query(`SELECT * FROM "${table}" LIMIT $1`, [limit]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/preview-sql - preview SQL query result (limit 20 rows)
+app.post('/api/preview-sql', async (req, res) => {
+  const { sql } = req.body;
+  if (!sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
+    return res.status(400).json({ error: 'Only SELECT queries are allowed.' });
+  }
+  // Force LIMIT 20 for preview
+  let previewSql = sql.trim().replace(/;*$/, '');
+  if (!/limit\s+\d+/i.test(previewSql)) {
+    previewSql += ' LIMIT 20';
+  }
+  try {
+    const result = await pool.query(previewSql);
+    res.json({ rows: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/save-dataset - save previewed dataset as new table
+app.post('/api/save-dataset', async (req, res) => {
+  const { sql, tableName } = req.body;
+  if (!sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
+    return res.status(400).json({ error: 'Only SELECT queries are allowed.' });
+  }
+  if (!tableName || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
+    return res.status(400).json({ error: 'Invalid table name.' });
+  }
+  try {
+    // Create table as select
+    await pool.query(`CREATE TABLE "${tableName}" AS ${sql.trim().replace(/;*$/, '')}`);
+    // Check if table exists
+    const check = await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`, [tableName]);
+    if (check.rowCount === 0) {
+      return res.status(404).json({ error: `Table '${tableName}' was not created.` });
+    }
+    res.json({ success: true, message: `Table '${tableName}' created.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Indicator Master Endpoints ---
+// POST /api/indicator-master
+app.post('/api/indicator-master', async (req, res) => {
+  const { indicator_name, description, sql_query, created_by } = req.body;
+  if (!indicator_name || !sql_query) {
+    return res.status(400).json({ error: 'Missing indicator_name or sql_query' });
+  }
+  try {
+    // Run the provided SQL query and expect a single integer result
+    const result = await pool.query(sql_query);
+    let query_result = null;
+    if (result.rows.length > 0) {
+      const firstRow = result.rows[0];
+      // Try to find the first integer value in the first row, even if it's a string
+      for (const v of Object.values(firstRow)) {
+        if (typeof v === 'number' && Number.isInteger(v)) {
+          query_result = v;
+          break;
+        }
+        if (typeof v === 'string' && /^\d+$/.test(v)) {
+          query_result = parseInt(v, 10);
+          break;
+        }
+      }
+    }
+    // Insert into indicator_master
+    await pool.query(
+      `INSERT INTO indicator_master (indicator_name, description, sql_query, query_result, created_by) VALUES ($1, $2, $3, $4, $5)`,
+      [indicator_name, description, sql_query, query_result, created_by || null]
+    );
+    res.json({ success: true, query_result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/indicator-master
+app.get('/api/indicator-master', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM indicator_master');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Multer setup for file uploads
 const upload = multer({ dest: 'uploads/' });
@@ -113,18 +331,26 @@ app.post('/api/upload-xlsx', upload.single('file'), async (req, res) => {
 // Endpoint: Grouped count for dynamic charts
 app.post('/api/grouped-count', async (req, res) => {
   const { table, xAxis, indicator } = req.body;
-  if (!table || !xAxis || !indicator) {
-    return res.status(400).json({ error: 'Missing table, xAxis, or indicator' });
+  if (!table || !xAxis) {
+    return res.status(400).json({ error: 'Missing table or xAxis' });
   }
   try {
-    // Count the number of rows grouped by xAxis where indicator is not null or empty
-    const query = `
-      SELECT "${xAxis}" as xAxisValue, COUNT("${indicator}") as count
-      FROM "${table}"
-      WHERE "${indicator}" IS NOT NULL AND "${indicator}" != ''
-      GROUP BY "${xAxis}"
-      ORDER BY xAxisValue
-    `;
+    let query;
+    if (indicator) {
+      query = `
+        SELECT "${xAxis}" as xAxisValue, COUNT("${indicator}") as count
+        FROM "${table}"
+        GROUP BY "${xAxis}"
+        ORDER BY xAxisValue
+      `;
+    } else {
+      query = `
+        SELECT "${xAxis}" as xAxisValue, COUNT(*) as count
+        FROM "${table}"
+        GROUP BY "${xAxis}"
+        ORDER BY xAxisValue
+      `;
+    }
     const result = await pool.query(query);
     res.json(result.rows);
   } catch (err) {
@@ -133,6 +359,7 @@ app.post('/api/grouped-count', async (req, res) => {
 });
 
 // Endpoint: Run arbitrary SQL query (for trusted/local dev use only!)
+
 app.post('/api/run-sql', async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: 'Missing SQL query' });
