@@ -171,27 +171,27 @@ app.post('/api/preview-sql', async (req, res) => {
 });
 
 // POST /api/save-dataset - save previewed dataset as new table
-app.post('/api/save-dataset', async (req, res) => {
-  const { sql, tableName } = req.body;
-  if (!sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
-    return res.status(400).json({ error: 'Only SELECT queries are allowed.' });
-  }
-  if (!tableName || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
-    return res.status(400).json({ error: 'Invalid table name.' });
-  }
-  try {
-    // Create table as select
-    await pool.query(`CREATE TABLE "${tableName}" AS ${sql.trim().replace(/;*$/, '')}`);
-    // Check if table exists
-    const check = await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`, [tableName]);
-    if (check.rowCount === 0) {
-      return res.status(404).json({ error: `Table '${tableName}' was not created.` });
-    }
-    res.json({ success: true, message: `Table '${tableName}' created.` });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// app.post('/api/save-dataset', async (req, res) => {
+//   const { sql, tableName } = req.body;
+//   if (!sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
+//     return res.status(400).json({ error: 'Only SELECT queries are allowed.' });
+//   }
+//   if (!tableName || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
+//     return res.status(400).json({ error: 'Invalid table name.' });
+//   }
+//   try {
+//     // Create table as select
+//     await pool.query(`CREATE TABLE "${tableName}" AS ${sql.trim().replace(/;*$/, '')}`);
+//     // Check if table exists
+//     const check = await pool.query(`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`, [tableName]);
+//     if (check.rowCount === 0) {
+//       return res.status(404).json({ error: `Table '${tableName}' was not created.` });
+//     }
+//     res.json({ success: true, message: `Table '${tableName}' created.` });
+//   } catch (err) {
+//     res.status(500).json({ error: err.message });
+//   }
+// });
 
 // --- Indicator Master Endpoints ---
 // POST /api/indicator-master
@@ -373,4 +373,52 @@ app.post('/api/run-sql', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
+});
+
+
+
+// Endpoint: Get a single dataset master entry by id
+app.get('/api/dataset-master/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM dataset_master WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint: List all dataset master entries
+app.get('/api/dataset-master', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM dataset_master ORDER BY id DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint: Save dataset as new table
+app.post('/api/save-dataset', async (req, res) => {
+  const { tableName, sql } = req.body;
+  if (!tableName || !sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
+    return res.status(400).json({ error: 'Invalid tableName or only SELECT queries are allowed.' });
+  }
+  try {
+    // Create table as select
+    await pool.query(`CREATE TABLE IF NOT EXISTS dataset_master (
+      id SERIAL PRIMARY KEY,
+      dataset_name TEXT NOT NULL,
+      sql_query TEXT NOT NULL,
+      created_on TIMESTAMP DEFAULT NOW(),
+      created_by INTEGER
+    )`);
+    await pool.query(
+      `INSERT INTO dataset_master (dataset_name, sql_query, created_by) VALUES ($1, $2, $3)`,
+      [tableName, sql, req.user && req.user.id]
+    );
+    res.json({ success: true, message: `Dataset '${tableName}' created.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
