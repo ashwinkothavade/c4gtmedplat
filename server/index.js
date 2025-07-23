@@ -1,16 +1,16 @@
-const express = require('express');
-const cors = require('cors');
-const { Pool } = require('pg');
-const multer = require('multer');
-const XLSX = require('xlsx');
-const fs = require('fs');
+const express = require("express");
+const cors = require("cors");
+const { Pool } = require("pg");
+const multer = require("multer");
+const XLSX = require("xlsx");
+const fs = require("fs");
 
 const app = express();
 const port = 5000;
 
-require('dotenv').config();
+require("dotenv").config();
 
-console.log('DB ENV:', {
+console.log("DB ENV:", {
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   name: process.env.DB_NAME,
@@ -39,10 +39,10 @@ CREATE TABLE IF NOT EXISTS indicator_master (
 // });
 
 const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'medplat',
-  password: '12345678',
+  user: "postgres",
+  host: "localhost",
+  database: "medplat",
+  password: "12345678",
   port: 5432,
 });
 
@@ -64,25 +64,33 @@ app.use(express.json());
 
 // POST /api/attribute-value
 // Body: { table, column, indicator } (either column+table or indicator)
-app.post('/api/attribute-value', async (req, res) => {
+app.post("/api/attribute-value", async (req, res) => {
   const { table, column, indicator } = req.body;
   try {
     if (indicator) {
       // Get value from indicator_master
-      const result = await pool.query('SELECT query_result FROM indicator_master WHERE indicator_name = $1', [indicator]);
+      const result = await pool.query(
+        "SELECT query_result FROM indicator_master WHERE indicator_name = $1",
+        [indicator]
+      );
       if (result.rows.length > 0) {
         return res.json({ value: result.rows[0].query_result });
       } else {
-        return res.status(404).json({ error: 'Indicator not found' });
+        return res.status(404).json({ error: "Indicator not found" });
       }
     } else if (table && column) {
       // Get count of non-null values in column
       const query = `SELECT COUNT("${column}") AS cnt FROM "${table}"`;
       const result = await pool.query(query);
-      const value = result.rows[0] && result.rows[0].cnt ? parseInt(result.rows[0].cnt, 10) : 0;
+      const value =
+        result.rows[0] && result.rows[0].cnt
+          ? parseInt(result.rows[0].cnt, 10)
+          : 0;
       return res.json({ value });
     } else {
-      return res.status(400).json({ error: 'Missing table/column or indicator' });
+      return res
+        .status(400)
+        .json({ error: "Missing table/column or indicator" });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -91,22 +99,30 @@ app.post('/api/attribute-value', async (req, res) => {
 
 // POST /api/derived-attribute
 // Body: { derived_name, formula, result }
-app.post('/api/derived-attribute', async (req, res) => {
+app.post("/api/derived-attribute", async (req, res) => {
   const { derived_name, formula, result } = req.body;
-  if (!derived_name || !formula || (typeof result !== 'number' && typeof result !== 'string')) {
-    return res.status(400).json({ error: 'Missing derived_name, formula, or result' });
+  if (
+    !derived_name ||
+    !formula ||
+    (typeof result !== "number" && typeof result !== "string")
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Missing derived_name, formula, or result" });
   }
   // Accept result as decimal (string or number)
   let resultVal = result;
-  if (typeof result === 'string') {
+  if (typeof result === "string") {
     resultVal = parseFloat(result);
     if (isNaN(resultVal)) {
-      return res.status(400).json({ error: 'Result must be a valid decimal number' });
+      return res
+        .status(400)
+        .json({ error: "Result must be a valid decimal number" });
     }
   }
   try {
     await pool.query(
-      'INSERT INTO derived_attributes (derived_name, formula, result) VALUES ($1, $2, $3)',
+      "INSERT INTO derived_attributes (derived_name, formula, result) VALUES ($1, $2, $3)",
       [derived_name, formula, resultVal]
     );
     res.json({ success: true });
@@ -116,9 +132,11 @@ app.post('/api/derived-attribute', async (req, res) => {
 });
 
 // GET /api/derived-attributes
-app.get('/api/derived-attributes', async (req, res) => {
+app.get("/api/derived-attributes", async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM derived_attributes ORDER BY created_on DESC');
+    const result = await pool.query(
+      "SELECT * FROM derived_attributes ORDER BY created_on DESC"
+    );
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -126,7 +144,7 @@ app.get('/api/derived-attributes', async (req, res) => {
 });
 
 // GET /api/table-metadata/:table - columns and types
-app.get('/api/table-metadata/:table', async (req, res) => {
+app.get("/api/table-metadata/:table", async (req, res) => {
   const { table } = req.params;
   try {
     const result = await pool.query(
@@ -140,11 +158,13 @@ app.get('/api/table-metadata/:table', async (req, res) => {
 });
 
 // GET /api/sample-data/:table?limit=10 - sample rows
-app.get('/api/sample-data/:table', async (req, res) => {
+app.get("/api/sample-data/:table", async (req, res) => {
   const { table } = req.params;
   const limit = parseInt(req.query.limit, 10) || 10;
   try {
-    const result = await pool.query(`SELECT * FROM "${table}" LIMIT $1`, [limit]);
+    const result = await pool.query(`SELECT * FROM "${table}" LIMIT $1`, [
+      limit,
+    ]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -152,15 +172,19 @@ app.get('/api/sample-data/:table', async (req, res) => {
 });
 
 // POST /api/preview-sql - preview SQL query result (limit 20 rows)
-app.post('/api/preview-sql', async (req, res) => {
+app.post("/api/preview-sql", async (req, res) => {
   const { sql } = req.body;
-  if (!sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
-    return res.status(400).json({ error: 'Only SELECT queries are allowed.' });
+  if (
+    !sql ||
+    typeof sql !== "string" ||
+    !sql.trim().toLowerCase().startsWith("select")
+  ) {
+    return res.status(400).json({ error: "Only SELECT queries are allowed." });
   }
   // Force LIMIT 20 for preview
-  let previewSql = sql.trim().replace(/;*$/, '');
+  let previewSql = sql.trim().replace(/;*$/, "");
   if (!/limit\s+\d+/i.test(previewSql)) {
-    previewSql += ' LIMIT 20';
+    previewSql += " LIMIT 20";
   }
   try {
     const result = await pool.query(previewSql);
@@ -195,10 +219,12 @@ app.post('/api/preview-sql', async (req, res) => {
 
 // --- Indicator Master Endpoints ---
 // POST /api/indicator-master
-app.post('/api/indicator-master', async (req, res) => {
+app.post("/api/indicator-master", async (req, res) => {
   const { indicator_name, description, sql_query, created_by } = req.body;
   if (!indicator_name || !sql_query) {
-    return res.status(400).json({ error: 'Missing indicator_name or sql_query' });
+    return res
+      .status(400)
+      .json({ error: "Missing indicator_name or sql_query" });
   }
   try {
     // Run the provided SQL query and expect a single integer result
@@ -208,11 +234,11 @@ app.post('/api/indicator-master', async (req, res) => {
       const firstRow = result.rows[0];
       // Try to find the first integer value in the first row, even if it's a string
       for (const v of Object.values(firstRow)) {
-        if (typeof v === 'number' && Number.isInteger(v)) {
+        if (typeof v === "number" && Number.isInteger(v)) {
           query_result = v;
           break;
         }
-        if (typeof v === 'string' && /^\d+$/.test(v)) {
+        if (typeof v === "string" && /^\d+$/.test(v)) {
           query_result = parseInt(v, 10);
           break;
         }
@@ -230,9 +256,9 @@ app.post('/api/indicator-master', async (req, res) => {
 });
 
 // GET /api/indicator-master
-app.get('/api/indicator-master', async (req, res) => {
+app.get("/api/indicator-master", async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM indicator_master');
+    const result = await pool.query("SELECT * FROM indicator_master");
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -240,49 +266,51 @@ app.get('/api/indicator-master', async (req, res) => {
 });
 
 // Multer setup for file uploads
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: "uploads/" });
 
 // Endpoint: Get all table names
-app.get('/api/tables', async (req, res) => {
+app.get("/api/tables", async (req, res) => {
   try {
-    const result = await pool.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`);
-    res.json(result.rows.map(row => row.table_name));
+    const result = await pool.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`
+    );
+    res.json(result.rows.map((row) => row.table_name));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/test-db', async (req, res) => {
+app.get("/api/test-db", async (req, res) => {
   try {
-    await pool.query('SELECT 1');
-    res.json({ success: true, message: 'Database connection successful!' });
+    await pool.query("SELECT 1");
+    res.json({ success: true, message: "Database connection successful!" });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // Endpoint: Get columns for a specific table
-app.get('/api/columns/:table', async (req, res) => {
+app.get("/api/columns/:table", async (req, res) => {
   const { table } = req.params;
   try {
     const result = await pool.query(
       `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`,
       [table]
     );
-    res.json(result.rows.map(row => row.column_name));
+    res.json(result.rows.map((row) => row.column_name));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Endpoint: Get data for selected columns from a table
-app.post('/api/data', async (req, res) => {
+app.post("/api/data", async (req, res) => {
   const { table, columns } = req.body;
   if (!table || !columns || !Array.isArray(columns) || columns.length === 0) {
-    return res.status(400).json({ error: 'Invalid table or columns' });
+    return res.status(400).json({ error: "Invalid table or columns" });
   }
   try {
-    const colString = columns.map(col => `"${col}"`).join(', ');
+    const colString = columns.map((col) => `"${col}"`).join(", ");
     const query = `SELECT ${colString} FROM "${table}"`;
     const result = await pool.query(query);
     res.json(result.rows);
@@ -292,36 +320,42 @@ app.post('/api/data', async (req, res) => {
 });
 
 // Endpoint: Upload XLSX and insert data into table
-app.post('/api/upload-xlsx', upload.single('file'), async (req, res) => {
+app.post("/api/upload-xlsx", upload.single("file"), async (req, res) => {
   const table = req.body.table;
   if (!req.file || !table) {
-    return res.status(400).json({ error: 'Missing file or table name' });
+    return res.status(400).json({ error: "Missing file or table name" });
   }
   try {
     // Read and parse the uploaded file
     const workbook = XLSX.readFile(req.file.path);
     const sheetName = workbook.SheetNames[0];
-    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: null });
+    const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+      defval: null,
+    });
     if (!jsonData.length) {
       fs.unlinkSync(req.file.path);
-      return res.status(400).json({ error: 'No data found in the Excel sheet' });
+      return res
+        .status(400)
+        .json({ error: "No data found in the Excel sheet" });
     }
     // Get columns from the first row
     const columns = Object.keys(jsonData[0]);
     // Create table if it doesn't exist
-    const colDefs = columns.map(col => `"${col}" TEXT`).join(', ');
+    const colDefs = columns.map((col) => `"${col}" TEXT`).join(", ");
     await pool.query(`CREATE TABLE IF NOT EXISTS "${table}" (${colDefs})`);
     // Insert data
     for (const row of jsonData) {
-      const values = columns.map(col => row[col]);
-      const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+      const values = columns.map((col) => row[col]);
+      const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
       await pool.query(
-        `INSERT INTO "${table}" (${columns.map(col => `"${col}"`).join(', ')}) VALUES (${placeholders})`,
+        `INSERT INTO "${table}" (${columns
+          .map((col) => `"${col}"`)
+          .join(", ")}) VALUES (${placeholders})`,
         values
       );
     }
     fs.unlinkSync(req.file.path);
-    res.json({ success: true, message: 'File uploaded and data inserted!' });
+    res.json({ success: true, message: "File uploaded and data inserted!" });
   } catch (err) {
     if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     res.status(500).json({ error: err.message });
@@ -329,10 +363,10 @@ app.post('/api/upload-xlsx', upload.single('file'), async (req, res) => {
 });
 
 // Endpoint: Grouped count for dynamic charts
-app.post('/api/grouped-count', async (req, res) => {
+app.post("/api/grouped-count", async (req, res) => {
   const { table, xAxis, indicator } = req.body;
   if (!table || !xAxis) {
-    return res.status(400).json({ error: 'Missing table or xAxis' });
+    return res.status(400).json({ error: "Missing table or xAxis" });
   }
   try {
     let query;
@@ -360,12 +394,12 @@ app.post('/api/grouped-count', async (req, res) => {
 
 // Endpoint: Run arbitrary SQL query (for trusted/local dev use only!)
 
-app.post('/api/run-sql', async (req, res) => {
+app.post("/api/run-sql", async (req, res) => {
   const { query } = req.body;
-  if (!query) return res.status(400).json({ error: 'Missing SQL query' });
+  if (!query) return res.status(400).json({ error: "Missing SQL query" });
   try {
     const result = await pool.query(query);
-    res.json({ rows: result.rows, fields: result.fields.map(f => f.name) });
+    res.json({ rows: result.rows, fields: result.fields.map((f) => f.name) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -375,13 +409,15 @@ app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
 
-
-
 // Endpoint: Get a single dataset master entry by id
-app.get('/api/dataset-master/:id', async (req, res) => {
+app.get("/api/dataset-master/:id", async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM dataset_master WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const result = await pool.query(
+      "SELECT * FROM dataset_master WHERE id = $1",
+      [req.params.id]
+    );
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: "Not found" });
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -389,9 +425,11 @@ app.get('/api/dataset-master/:id', async (req, res) => {
 });
 
 // Endpoint: List all dataset master entries
-app.get('/api/dataset-master', async (req, res) => {
+app.get("/api/dataset-master", async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM dataset_master ORDER BY id DESC');
+    const result = await pool.query(
+      "SELECT * FROM dataset_master ORDER BY id DESC"
+    );
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -399,10 +437,17 @@ app.get('/api/dataset-master', async (req, res) => {
 });
 
 // Endpoint: Save dataset as new table
-app.post('/api/save-dataset', async (req, res) => {
+app.post("/api/save-dataset", async (req, res) => {
   const { tableName, sql } = req.body;
-  if (!tableName || !sql || typeof sql !== 'string' || !sql.trim().toLowerCase().startsWith('select')) {
-    return res.status(400).json({ error: 'Invalid tableName or only SELECT queries are allowed.' });
+  if (
+    !tableName ||
+    !sql ||
+    typeof sql !== "string" ||
+    !sql.trim().toLowerCase().startsWith("select")
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Invalid tableName or only SELECT queries are allowed." });
   }
   try {
     // Create table as select
@@ -418,6 +463,84 @@ app.post('/api/save-dataset', async (req, res) => {
       [tableName, sql, req.user && req.user.id]
     );
     res.json({ success: true, message: `Dataset '${tableName}' created.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint: Chart data from dataset SQL
+app.post("/api/dataset-chart", async (req, res) => {
+  const { sql, datasetId } = req.body;
+  if (!sql || typeof sql !== "string") {
+    return res.status(400).json({ error: "Invalid SQL query" });
+  }
+
+  try {
+    const result = await pool.query(sql);
+    const rows = result.rows;
+
+    if (rows.length === 0) {
+      return res.json([]);
+    }
+
+    // Transform data into chart format
+    const columns = Object.keys(rows[0]);
+    let chartData = [];
+
+    if (columns.length === 2) {
+      // Two columns: use as label and count
+      const labelCol = columns[0];
+      const countCol = columns[1];
+      chartData = rows.map((row) => ({
+        label: String(row[labelCol]),
+        count: Number(row[countCol]) || 0,
+      }));
+    } else if (columns.length > 2) {
+      // Multiple columns: find count column
+      const countColumn = columns.find(
+        (col) =>
+          col.toLowerCase().includes("count") ||
+          col.toLowerCase().includes("total") ||
+          col.toLowerCase().includes("sum") ||
+          col.toLowerCase() === "cnt"
+      );
+
+      if (countColumn) {
+        const labelCol = columns[0];
+        chartData = rows.map((row) => ({
+          label: String(row[labelCol]),
+          count: Number(row[countColumn]) || 0,
+        }));
+      } else {
+        // Group by first column
+        const labelCol = columns[0];
+        const groupedData = rows.reduce((acc, row) => {
+          const label = String(row[labelCol]);
+          acc[label] = (acc[label] || 0) + 1;
+          return acc;
+        }, {});
+
+        chartData = Object.entries(groupedData).map(([label, count]) => ({
+          label,
+          count,
+        }));
+      }
+    } else {
+      // Single column: count occurrences
+      const labelCol = columns[0];
+      const groupedData = rows.reduce((acc, row) => {
+        const label = String(row[labelCol]);
+        acc[label] = (acc[label] || 0) + 1;
+        return acc;
+      }, {});
+
+      chartData = Object.entries(groupedData).map(([label, count]) => ({
+        label,
+        count,
+      }));
+    }
+
+    res.json(chartData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
